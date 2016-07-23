@@ -3,6 +3,7 @@
 Updates the IPs for several DNS records on CloudFlare using their native API
 
 # Howto:
+* rename options.cfg.template to options.cfg
 * change options.cfg
 * run ``python main.py`` to see if it works
 

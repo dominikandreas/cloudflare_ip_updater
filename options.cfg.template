@@ -1,0 +1,5 @@
+[Options]
+api_key = your api key
+email = your cloudflare email address 
+domain = your domain name
+sub_domain_names = ['your', 'subdomains', 'here']
