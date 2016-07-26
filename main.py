@@ -56,28 +56,36 @@ def get_ip6():
 
 
 def get_ip():
-    return json.load(urllib2.urlopen('https://api.ipify.org/?format=json'))['ip']
-
+    try:
+        return json.load(urllib2.urlopen('http://api.ipify.org/?format=json'))['ip']
+    except:
+        try:
+            return json.load(urlopen('http://jsonip.com'))['ip']
+        except:
+            return json.load(urlopen('http://httpbin.org/ip'))['origin']
 
 if __name__ == "__main__":
-    globals().update(get_options())
-    ipv4 = get_ip()
-    zone_id = get_zone_id()
-    record_ids = get_record_ids(zone_id, sub_domain_names)
     try:
-        ipv6 = get_ip6()
+        globals().update(get_options())
+        ipv4 = get_ip()
+        zone_id = get_zone_id()
+        record_ids = get_record_ids(zone_id, sub_domain_names)
+        try:
+            ipv6 = get_ip6()
+        except Exception as e:
+            logging.exception(e)
+            ipv6 = None
+            logging.warn("Unable to get IPv6, will ignore AAAA records")
+
+        for name, rec_id, rec_type in get_record_ids(zone_id, sub_domain_names):
+            if rec_type == "AAAA" and not ipv6 is None:
+                logging.warn("Skipping %s since its a AAAA record and no IPV6 available")
+                continue
+            print("updating ip for " + name)
+            options = {'id': rec_id, 'type': rec_type, 'name': name, 'content': ipv4 if rec_type=="A" else ipv6}
+            url = "https://api.cloudflare.com/client/v4/zones/%s/dns_records/%s"%(zone_id, rec_id)
+            headers={"X-Auth-Email":email, "X-Auth-Key":api_key}
+            response = requests.put(url, headers=headers, data=json.dumps(options)).json()
+            print("success: %s \n%s"%(response["success"],("" if response["success"] else response["errors"])))
     except Exception as e:
         logging.exception(e)
-        ipv6 = None
-        logging.warn("Unable to get IPv6, will ignore AAAA records")
-
-    for name, rec_id, rec_type in get_record_ids(zone_id, sub_domain_names):
-        if rec_type == "AAAA" and not ipv6 is None:
-            logging.warn("Skipping %s since its a AAAA record and no IPV6 available")
-            continue
-        print("updating ip for " + name)
-        options = {'id': rec_id, 'type': rec_type, 'name': name, 'content': ipv4 if rec_type=="A" else ipv6}
-        url = "https://api.cloudflare.com/client/v4/zones/%s/dns_records/%s"%(zone_id, rec_id)
-        headers={"X-Auth-Email":email, "X-Auth-Key":api_key}
-        response = requests.put(url, headers=headers, data=json.dumps(options)).json()
-        print("success: %s \n%s"%(response["success"],("" if response["success"] else response["errors"])))
