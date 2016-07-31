@@ -1,0 +1,6 @@
+{
+  "name": "Cloudflare ip updater",
+  "tagline": "Updates the IPs for several DNS records on CloudFlare using their native API",
+  "body": "# cloudflare_ip_updater\r\n\r\nUpdates the IPs for several DNS records on CloudFlare using their native API\r\n\r\n# Howto:\r\n* run ``python main.py``\r\n* it will ask you for the necessary info, such as email, api and subdomains\r\n* see if it works\r\n\r\n## Use crontab to run the updater every 5 minutes:\r\n* ``crontab -e``\r\n* add the following line: ``*/5 * * * * python /path_to_cloudflare_ip_updater/main.py``\r\n\r\n",
+  "note": "Don't delete this file! It's used internally to help with page regeneration."
+}
