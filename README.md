@@ -4,10 +4,12 @@ Updates the IPs for several DNS records on CloudFlare using their native API
 
 # Howto:
 * run 
+
   ```bash
   git clone git@github.com:dominikandreas/cloudflare_ip_updater.git
   python cloudflare_ip_updater/main.py
   ```
+  
 * it will ask you for the necessary info, such as email, api and subdomains
 * see if it works
 
