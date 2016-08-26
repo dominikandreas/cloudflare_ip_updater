@@ -64,6 +64,13 @@ def get_ip():
         except:
             return json.load(urlopen('http://httpbin.org/ip'))['origin']
 
+def get_rec_options(rec_id,rec_type,name):
+    options = {'id': rec_id, 'type': rec_type, 'proxied':True, 'name': name}
+    url = "https://api.cloudflare.com/client/v4/zones/%s/dns_records/%s"%(zone_id, rec_id)
+    headers={"X-Auth-Email":email, "X-Auth-Key":api_key}
+    return requests.get(url, headers=headers, data="{}").json()["result"]
+
+
 if __name__ == "__main__":
     try:
         globals().update(get_options())
@@ -82,10 +89,11 @@ if __name__ == "__main__":
                 logging.warn("Skipping %s since its a AAAA record and no IPV6 available")
                 continue
             print("updating ip for " + name)
-            options = {'id': rec_id, 'type': rec_type, 'name': name, 'content': ipv4 if rec_type=="A" else ipv6}
             url = "https://api.cloudflare.com/client/v4/zones/%s/dns_records/%s"%(zone_id, rec_id)
             headers={"X-Auth-Email":email, "X-Auth-Key":api_key}
-            response = requests.put(url, headers=headers, data=json.dumps(options)).json()
+            rec_options = get_rec_options(rec_id, rec_type, name)
+            rec_options["content"] = ipv4 if rec_options["type"] == "A" else ipv6
+            response = requests.put(url, headers=headers, data=json.dumps(rec_options)).json()
             print("success: %s \n%s"%(response["success"],("" if response["success"] else response["errors"])))
     except Exception as e:
         logging.exception(e)
