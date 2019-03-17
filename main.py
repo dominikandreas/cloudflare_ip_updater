@@ -44,6 +44,7 @@ class Record():
 
 class CloudflareDNSUpdater:
     def __init__(self, email, api_key, domain_name):
+        print("initializing cloudflare api")
         self.cf = CloudFlare.CloudFlare(email=email, token=api_key)
         self.zone_name = domain_name
         print("getting zones... ", end="")
@@ -56,7 +57,9 @@ class CloudflareDNSUpdater:
             raise RuntimeError("Could not find a domain with name %s, found: %s" % (zone_name, str(self.zones)))
 
     def get_dns_records(self):
-        return [Record(**response) for response in self.cf.zones.dns_records.get(self.zone_id)]
+        records = [Record(**response) for response in self.cf.zones.dns_records.get(self.zone_id)]
+        print("got records: ", ", ".join([r.name.split(".")[0] for r in records]))
+        return records
 
     def update_record(self, record, ip):
         print("updating %-25s to %s... " % (record.name, ip), end="")
@@ -66,8 +69,9 @@ class CloudflareDNSUpdater:
 
     def update_all_records(self, ipv4=None, ipv6=None, sub_domains=None, force=False):
         for record in self.get_dns_records():
+            print("handling record %s" % record.name)
             if sub_domains is not None:
-                sub_domain_matches = True in [(sub == record.name.split(".")[0].lower()) for sub in sub_domains]
+                sub_domain_matches = True in [(sub.lower() == record.name.split(".")[0].lower()) for sub in sub_domains]
             else:
                 sub_domain_matches = True
             if sub_domain_matches:
@@ -78,6 +82,8 @@ class CloudflareDNSUpdater:
                 else:
                     print(("ip %s matches. " %record.ip) if record.ip in (ipv4, ipv6)
                           else "invalid record type", "skipping record", record)
+            else:
+                print("subdomain %s does not match any of the given records" % record.name)
 
 
 class Config:
