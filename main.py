@@ -1,54 +1,23 @@
-import os,sys
+import os
+import sys
+import CloudFlare
 import json
-import requests
-from subprocess import Popen, PIPE
-import ConfigParser
-import urllib2
-import logging
-
-base_path = os.path.dirname(os.path.abspath(__file__))
+from urllib.request import urlopen
+import yaml
 
 
-def parse_api_result(url_extension, headers, data=None):
-    base_api_url = "https://api.cloudflare.com/client/v4/zones"
-    if data is not None:
-        res = requests.put(base_api_url+url_extension, headers=headers, data=json.dumps(options)).json()
-    else:
-        res = requests.get(base_api_url+url_extension, headers=headers).json()
-    if not res.get("success", False):
-        print("error occurred for %s:\n%s\n"%(url_extension, res))
-    return res
+base_dir = os.path.abspath(os.path.dirname(__file__))
 
-def get_options():
-    if not os.path.isfile(base_path+"/options.json"):
-        options = {entry: raw_input("please enter your %s\n"%entry) \
-            for entry in ["email", "api_key", "domain_name", "sub_domain_names"]}
-        options["sub_domain_names"] = [e.replace(",","").strip() \
-            for e in options["sub_domain_names"].split(" ") if "." in e]
-        with open(base_path+"/options.json","wb") as f:
-            f.write(json.dumps(options, sort_keys=True, indent=4))
-            return options
-    else:
-        with open(base_path+"/options.json", "r") as f:
-            return json.loads(f.read())
 
-def get_zone_id():
-    print("getting zone id")
-    return parse_api_result("?name="+domain_name, headers={"X-Auth-Email":email, "X-Auth-Key":api_key})["result"][0]["id"]
 
-def get_record_ids(zone_id, sub_domain_names):
-    print("getting record ids for %s"%sub_domain_names)
-    res = parse_api_result("/%s/dns_records"%(zone_id), headers={"X-Auth-Email":email, "X-Auth-Key":api_key})
-    return [(e["name"],e["id"], e["type"]) for e in res["result"] if (e["type"] == "A" or e["type"] == "AAAA") and e["name"] in sub_domain_names]
-
-def get_ip6():
+def get_ipv6():
     # CAUTION! DIRTY INSUFFICIENTLY TESTED HACK INCOMING
     def get_res(command):
         return os.popen(command).read().split("\n")
     ips = get_res("/sbin/ifconfig eth0 |  awk '/inet6/{print $3}'")
     scopes = get_res("/sbin/ifconfig eth0 |  awk '/inet6/{print $4}'")
     if len(sys.argv)>1 and sys.argv[1]=="debug":
-        print "ips, scopes:", ips, scopes
+        print("ips, scopes:", ips, scopes)
     ip = [ip for ip,scope in zip(ips,scopes) if "Global" in scope][0]
     if not ":" in ip:
         raise RuntimeError("got invalid ipv6: %s"%ip)
@@ -57,43 +26,89 @@ def get_ip6():
 
 def get_ip():
     try:
-        return json.load(urllib2.urlopen('http://api.ipify.org/?format=json'))['ip']
+        return json.load(urlopen('http://api.ipify.org/?format=json'))['ip']
     except:
         try:
             return json.load(urlopen('http://jsonip.com'))['ip']
         except:
             return json.load(urlopen('http://httpbin.org/ip'))['origin']
 
-def get_rec_options(rec_id,rec_type,name):
-    options = {'id': rec_id, 'type': rec_type, 'proxied':True, 'name': name}
-    url = "https://api.cloudflare.com/client/v4/zones/%s/dns_records/%s"%(zone_id, rec_id)
-    headers={"X-Auth-Email":email, "X-Auth-Key":api_key}
-    return requests.get(url, headers=headers, data="{}").json()["result"]
+class Record():
+    def __init__(self, id, name, type, content, **other_props):
+        self.id, self.name, self.type, self.ip = id, name, type, content
+        self.other_props = other_props
+
+    def __repr__(self):
+        return "Record(id=%s, name=%s, type=%s, ip=%s)" % (self.id, self.name, self.type, self.ip)
+
+
+class CloudflareDNSUpdater:
+    def __init__(self, email, api_key, domain_name):
+        print("initializing cloudflare api")
+        self.cf = CloudFlare.CloudFlare(email=email, token=api_key)
+        self.zone_name = domain_name
+        print("getting zones... ", end="")
+        self.zones = self.cf.zones.get()
+        print("done")
+        zone_matches = [e for e in self.zones if e['name'] == domain_name]
+        if zone_matches:
+            self.zone_id = zone_matches[0]['id']
+        else:
+            raise RuntimeError("Could not find a domain with name %s, found: %s" % (zone_name, str(self.zones)))
+
+    def get_dns_records(self):
+        records = [Record(**response) for response in self.cf.zones.dns_records.get(self.zone_id)]
+        print("got records: ", ", ".join([r.name.split(".")[0] for r in records]))
+        return records
+
+    def update_record(self, record, ip):
+        print("updating %-25s to %s... " % (record.name, ip), end="")
+        dns_record = {'name':record.name, 'type':record.type, 'content':ip}
+        self.cf.zones.dns_records.put(self.zone_id, record.id, data=dns_record)
+        print("done")
+
+    def update_all_records(self, ipv4=None, ipv6=None, sub_domains=None, force=False):
+        for record in self.get_dns_records():
+            print("handling record %s" % record.name)
+            if sub_domains is not None:
+                sub_domain_matches = True in [(sub.lower() == record.name.split(".")[0].lower()) for sub in sub_domains]
+            else:
+                sub_domain_matches = True
+            if sub_domain_matches:
+                if record.type == "A" and ipv4 and ipv4 != record.ip:
+                    self.update_record(record, ipv4)
+                elif record.type == "AAAA" and ipv6 and ipv6 != record.ip:
+                    self.update_record(record, ipv6)
+                else:
+                    print(("ip %s matches. " %record.ip) if record.ip in (ipv4, ipv6)
+                          else "invalid record type", "skipping record", record)
+            else:
+                print("subdomain %s does not match any of the given records" % record.name)
+
+
+class Config:
+    def __init__(self, domain_name, email, api_key, sub_domains, ipv4=True, ipv6=False):
+        self.domain_name, self.email, self.api_key, self.sub_domains, self.ipv4, self.ipv6 = \
+             domain_name, email, api_key, sub_domains, ipv4, ipv6
+    def __repr__(self):
+        return "Config(domain="+self.domain_name+", email="+self.email+\
+                ", sub domains="+str(self.sub_domains)+")"
 
 
 if __name__ == "__main__":
-    try:
-        globals().update(get_options())
-        ipv4 = get_ip()
-        zone_id = get_zone_id()
-        record_ids = get_record_ids(zone_id, sub_domain_names)
-        try:
-            ipv6 = get_ip6()
-        except Exception as e:
-            logging.exception(e)
-            ipv6 = None
-            logging.warn("Unable to get IPv6, will ignore AAAA records")
+    with open(base_dir+"/config.yaml") as f:
+        configs = yaml.load(f.read())
 
-        for name, rec_id, rec_type in get_record_ids(zone_id, sub_domain_names):
-            if rec_type == "AAAA" and not ipv6 is None:
-                logging.warn("Skipping %s since its a AAAA record and no IPV6 available")
-                continue
-            print("updating ip for " + name)
-            url = "https://api.cloudflare.com/client/v4/zones/%s/dns_records/%s"%(zone_id, rec_id)
-            headers={"X-Auth-Email":email, "X-Auth-Key":api_key}
-            rec_options = get_rec_options(rec_id, rec_type, name)
-            rec_options["content"] = ipv4 if rec_options["type"] == "A" else ipv6
-            response = requests.put(url, headers=headers, data=json.dumps(rec_options)).json()
-            print("success: %s \n%s"%(response["success"],("" if response["success"] else response["errors"])))
-    except Exception as e:
-        logging.exception(e)
+    ipv4, ipv6 = get_ip(), None
+    print("ipv4: %s, ipv6: %s" % (ipv4, ipv6))
+
+    for name, config in configs.items():
+        config = Config(**config)
+        if config.ipv6 and ipv6 is None:
+            try:
+                ipv6 = get_ipv6()
+            except Exception as e:
+                print("unable to get ipv6: %s, skipping ipv6 update" % e)
+        print(config)
+        updater = CloudflareDNSUpdater(email=config.email, api_key=config.api_key, domain_name=config.domain_name)
+        updater.update_all_records(ipv4=ipv4, ipv6=ipv6 if config.ipv6 else None)
