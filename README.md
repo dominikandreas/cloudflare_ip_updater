@@ -28,7 +28,7 @@ some_name: # you can enter any name you want
   ipv6: false       # whether to update ipv6 records
   sub_domains: [...] # the sub domain names to include in the update
 ```
-(`ctr+x` + `enter` to write file and exit nano)
+ (`ctr+x`, `enter` to write file and exit nano)
 
 * run the cloudflare updater
   ```bash
