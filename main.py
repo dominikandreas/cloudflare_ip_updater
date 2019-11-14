@@ -1,3 +1,4 @@
+#!/usr/bin/python3
 import os
 import sys
 import CloudFlare
@@ -38,6 +39,9 @@ class Record():
         self.id, self.name, self.type, self.ip = id, name, type, content
         self.other_props = other_props
 
+    def get_data(self):
+        return {'content':self.ip, 'name':self.name, 'type': self.type, **self.other_props}
+
     def __repr__(self):
         return "Record(id=%s, name=%s, type=%s, ip=%s)" % (self.id, self.name, self.type, self.ip)
 
@@ -63,8 +67,8 @@ class CloudflareDNSUpdater:
 
     def update_record(self, record, ip):
         print("updating %-25s to %s... " % (record.name, ip), end="")
-        dns_record = {'name':record.name, 'type':record.type, 'content':ip}
-        self.cf.zones.dns_records.put(self.zone_id, record.id, data=dns_record)
+        record.ip = ip
+        self.cf.zones.dns_records.put(self.zone_id, record.id, data=record.get_data())
         print("done")
 
     def update_all_records(self, ipv4=None, ipv6=None, sub_domains=None, force=False):
