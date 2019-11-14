@@ -4,23 +4,37 @@ Updates the IPs for several DNS records on CloudFlare using their native API
 
 # Howto:
 
-* create a config.yaml with contents:
-```yaml
-some_name: # you can enter any name you want
-  api_key: ...  # your api_key (get it from your cloudflare account console)
-  email: ...    # your cloudflare account email
-  domain_name: ...  # the domain name to target
-  ipv4: true        # whether to update ipv4 records
-  ipv6: false       # whether to update ipv6 records
-  sub_domains: [...] # the sub domain names to include in the update
-```
-
-* run 
+* clone repo and setup dependencies
 
   ```bash
   git clone git@github.com:dominikandreas/cloudflare_ip_updater.git
-  python3 cloudflare_ip_updater/main.py
+  cd cloudflare_ip_updater
+  python3 -m pip install -r requirements.txt
   ```
+  
+* create a config.yaml:
+
+    ```bash
+    nano config.yaml
+    ```
+
+    populate the config file with the following information:
+    ```yaml
+    some_name: # you can enter any name you want
+      api_key: ...  # your api_key (get it from your cloudflare account console)
+      email: ...    # your cloudflare account email
+      domain_name: ...  # the domain name to target
+      ipv4: true        # whether to update ipv4 records
+      ipv6: false       # whether to update ipv6 records
+      sub_domains: [...] # the sub domain names to include in the update
+    ```
+    (`ctr+x`, `enter` to write file and exit nano)
+
+* run the cloudflare updater
+  ```bash
+  python3 main.py
+  ```
+
   
 ## Use crontab to run the updater every 5 minutes:
 * ``crontab -e``
