@@ -6,22 +6,21 @@ import json
 from urllib.request import urlopen
 import yaml
 
-
 base_dir = os.path.abspath(os.path.dirname(__file__))
-
 
 
 def get_ipv6():
     # CAUTION! DIRTY INSUFFICIENTLY TESTED HACK INCOMING
     def get_res(command):
         return os.popen(command).read().split("\n")
+
     ips = get_res("/sbin/ifconfig eth0 |  awk '/inet6/{print $3}'")
     scopes = get_res("/sbin/ifconfig eth0 |  awk '/inet6/{print $4}'")
-    if len(sys.argv)>1 and sys.argv[1]=="debug":
+    if len(sys.argv) > 1 and sys.argv[1] == "debug":
         print("ips, scopes:", ips, scopes)
-    ip = [ip for ip,scope in zip(ips,scopes) if "Global" in scope][0]
-    if not ":" in ip:
-        raise RuntimeError("got invalid ipv6: %s"%ip)
+    ip = [ip for ip, scope in zip(ips, scopes) if "Global" in scope][0]
+    if ":" not in ip:
+        raise RuntimeError("got invalid ipv6: %s" % ip)
     return ip.split("/")[0]
 
 
@@ -34,13 +33,14 @@ def get_ip():
         except:
             return json.load(urlopen('http://httpbin.org/ip'))['origin']
 
+
 class Record():
     def __init__(self, id, name, type, content, **other_props):
         self.id, self.name, self.type, self.ip = id, name, type, content
         self.other_props = other_props
 
     def get_data(self):
-        return {'content':self.ip, 'name':self.name, 'type': self.type, **self.other_props}
+        return {'content': self.ip, 'name': self.name, 'type': self.type, **self.other_props}
 
     def __repr__(self):
         return "Record(id=%s, name=%s, type=%s, ip=%s)" % (self.id, self.name, self.type, self.ip)
@@ -62,8 +62,16 @@ class CloudflareDNSUpdater:
 
     def get_dns_records(self):
         records = [Record(**response) for response in self.cf.zones.dns_records.get(self.zone_id)]
-        print("got records: ", ", ".join([r.name.split(".")[0] for r in records]))
+        print("got records: ", ", ".join([r.name for r in records]))
         return records
+
+    def get_single_dns_record(self, sub_domain_name):
+        name = (sub_domain_name + '.' + self.zone_name) if len(sub_domain_name) > 0 else self.zone_name
+        responses = self.cf.zones.dns_records.get(self.zone_id, params={'name': name})
+        if len(responses):
+            return Record(**responses[0])
+        else:
+            print("got empty response for " + name + ". skipping...")
 
     def update_record(self, record, ip):
         print("updating %-25s to %s... " % (record.name, ip), end="")
@@ -71,7 +79,18 @@ class CloudflareDNSUpdater:
         self.cf.zones.dns_records.put(self.zone_id, record.id, data=record.get_data())
         print("done")
 
-    def update_all_records(self, ipv4=None, ipv6=None, sub_domains=None, force=False):
+    def update_records(self, records, ipv4, ipv6, force=False):
+        for record in records:
+            if record.type == "A" and ipv4 and (ipv4 != record.ip or force):
+                self.update_record(record, ipv4)
+            elif record.type == "AAAA" and ipv6 and (ipv6 != record.ip or force):
+                self.update_record(record, ipv6)
+            else:
+                print(("ip %s matches. " % record.ip) if record.ip in (ipv4, ipv6)
+                      else "invalid record type", "skipping record", record)
+
+    def update_subdomain_ips(self, ipv4=None, ipv6=None, sub_domains=None, force_updates=False):
+        records_to_update = {}
         for record in self.get_dns_records():
             print("handling record %s" % record.name)
             if sub_domains is not None:
@@ -79,29 +98,34 @@ class CloudflareDNSUpdater:
             else:
                 sub_domain_matches = True
             if sub_domain_matches:
-                if record.type == "A" and ipv4 and ipv4 != record.ip:
-                    self.update_record(record, ipv4)
-                elif record.type == "AAAA" and ipv6 and ipv6 != record.ip:
-                    self.update_record(record, ipv6)
-                else:
-                    print(("ip %s matches. " %record.ip) if record.ip in (ipv4, ipv6)
-                          else "invalid record type", "skipping record", record)
+                records_to_update[record.name.split(".")[0]] = record
             else:
                 print("subdomain %s does not match any of the given records" % record.name)
+
+        for sub_domain_name in (sub_domains or ()):
+            if sub_domain_name.lower() not in records_to_update:
+                if sub_domain_name == self.zone_name:
+                    sub_domain_name = ""
+                record = self.get_single_dns_record(sub_domain_name)
+                if record is not None:
+                    records_to_update[sub_domain_name] = record
+
+        self.update_records(records_to_update.values(), ipv4, ipv6, force=force_updates)
 
 
 class Config:
     def __init__(self, domain_name, email, api_key, sub_domains, ipv4=True, ipv6=False):
         self.domain_name, self.email, self.api_key, self.sub_domains, self.ipv4, self.ipv6 = \
-             domain_name, email, api_key, sub_domains, ipv4, ipv6
+            domain_name, email, api_key, sub_domains, ipv4, ipv6
+
     def __repr__(self):
-        return "Config(domain="+self.domain_name+", email="+self.email+\
-                ", sub domains="+str(self.sub_domains)+")"
+        return "Config(domain=" + self.domain_name + ", email=" + self.email + \
+               ", sub domains=" + str(self.sub_domains) + ")"
 
 
 if __name__ == "__main__":
-    with open(base_dir+"/config.yaml") as f:
-        configs = yaml.load(f.read())
+    with open(base_dir + "/config.yaml") as f:
+        configs = yaml.safe_load(f.read())
 
     ipv4, ipv6 = get_ip(), None
     print("ipv4: %s, ipv6: %s" % (ipv4, ipv6))
@@ -115,4 +139,4 @@ if __name__ == "__main__":
                 print("unable to get ipv6: %s, skipping ipv6 update" % e)
         print(config)
         updater = CloudflareDNSUpdater(email=config.email, api_key=config.api_key, domain_name=config.domain_name)
-        updater.update_all_records(ipv4=ipv4, ipv6=ipv6 if config.ipv6 else None)
+        updater.update_subdomain_ips(ipv4=ipv4, ipv6=ipv6 if config.ipv6 else None, sub_domains=config.sub_domains)
