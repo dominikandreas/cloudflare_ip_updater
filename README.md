@@ -20,13 +20,14 @@ Updates the IPs for several DNS records on CloudFlare using their native API
 
     populate the config file with the following information:
     ```yaml
-    some_name: # you can enter any name you want
-      api_key: ...  # your api_key (get it from your cloudflare account console)
-      email: ...    # your cloudflare account email
-      domain_name: ...  # the domain name to target
-      ipv4: true        # whether to update ipv4 records
-      ipv6: false       # whether to update ipv6 records
-      sub_domains: [...] # the sub domain names to include in the update
+    api_key: ...  # your api_key (get it from your cloudflare account console)
+    email: ...    # your cloudflare account email
+    domain_name: ...  # the domain name to target
+    ipv4: true        # whether to update ipv4 records
+    ipv6: false       # whether to update ipv6 records
+    sub_domains:  # the sub domain names to include in the update
+      - ...     
+      - ... 
     ```
     (`ctr+x`, `enter` to write file and exit nano)
 
@@ -34,7 +35,14 @@ Updates the IPs for several DNS records on CloudFlare using their native API
   ```bash
   python3 main.py
   ```
-
+  to disable infinite loop:
+  ```bash
+  python3 main.py --loop false
+  ```
+* Alternatively: Update only a specific domain to a target ip (ip is optional)
+  ```bash
+  python3 main.py --subdomain www --domain mydomain.de --ipv4 1.1.1.1
+  ```
   
 ## Use crontab to run the updater every 5 minutes:
 * ``crontab -e``

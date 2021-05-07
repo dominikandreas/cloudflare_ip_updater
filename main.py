@@ -1,116 +1,12 @@
 #!/usr/bin/python3
 import os
-import sys
-import CloudFlare
-import json
-from urllib.request import urlopen
 import yaml
+import traceback
+
+from core import CloudflareDNSUpdater
+from utils import get_ipv6, get_ipv4
 
 base_dir = os.path.abspath(os.path.dirname(__file__))
-
-
-def get_ipv6():
-    # CAUTION! DIRTY INSUFFICIENTLY TESTED HACK INCOMING
-    def get_res(command):
-        return os.popen(command).read().split("\n")
-
-    ips = get_res("/sbin/ifconfig eth0 |  awk '/inet6/{print $3}'")
-    scopes = get_res("/sbin/ifconfig eth0 |  awk '/inet6/{print $4}'")
-    if len(sys.argv) > 1 and sys.argv[1] == "debug":
-        print("ips, scopes:", ips, scopes)
-    ip = [ip for ip, scope in zip(ips, scopes) if "Global" in scope][0]
-    if ":" not in ip:
-        raise RuntimeError("got invalid ipv6: %s" % ip)
-    return ip.split("/")[0]
-
-
-def get_ip():
-    try:
-        return json.load(urlopen('http://api.ipify.org/?format=json'))['ip']
-    except:
-        try:
-            return json.load(urlopen('http://jsonip.com'))['ip']
-        except:
-            return json.load(urlopen('http://httpbin.org/ip'))['origin']
-
-
-class Record():
-    def __init__(self, id, name, type, content, **other_props):
-        self.id, self.name, self.type, self.ip = id, name, type, content
-        self.other_props = other_props
-
-    def get_data(self):
-        return {'content': self.ip, 'name': self.name, 'type': self.type, **self.other_props}
-
-    def __repr__(self):
-        return "Record(id=%s, name=%s, type=%s, ip=%s)" % (self.id, self.name, self.type, self.ip)
-
-
-class CloudflareDNSUpdater:
-    def __init__(self, email, api_key, domain_name):
-        print("initializing cloudflare api")
-        self.cf = CloudFlare.CloudFlare(email=email, token=api_key)
-        self.zone_name = domain_name
-        print("getting zones... ", end="")
-        self.zones = self.cf.zones.get()
-        print("done")
-        zone_matches = [e for e in self.zones if e['name'] == domain_name]
-        if zone_matches:
-            self.zone_id = zone_matches[0]['id']
-        else:
-            raise RuntimeError("Could not find a domain with name %s, found: %s" % (zone_name, str(self.zones)))
-
-    def get_dns_records(self):
-        records = [Record(**response) for response in self.cf.zones.dns_records.get(self.zone_id)]
-        print("got records: ", ", ".join([r.name for r in records]))
-        return records
-
-    def get_single_dns_record(self, sub_domain_name):
-        name = (sub_domain_name + '.' + self.zone_name) if len(sub_domain_name) > 0 else self.zone_name
-        responses = self.cf.zones.dns_records.get(self.zone_id, params={'name': name})
-        if len(responses):
-            return Record(**responses[0])
-        else:
-            print("got empty response for " + name + ". skipping...")
-
-    def update_record(self, record, ip):
-        print("updating %-25s to %s... " % (record.name, ip), end="")
-        record.ip = ip
-        self.cf.zones.dns_records.put(self.zone_id, record.id, data=record.get_data())
-        print("done")
-
-    def update_records(self, records, ipv4, ipv6, force=False):
-        for record in records:
-            if record.type == "A" and ipv4 and (ipv4 != record.ip or force):
-                self.update_record(record, ipv4)
-            elif record.type == "AAAA" and ipv6 and (ipv6 != record.ip or force):
-                self.update_record(record, ipv6)
-            else:
-                print(("ip %s matches. " % record.ip) if record.ip in (ipv4, ipv6)
-                      else "invalid record type", "skipping record", record)
-
-    def update_subdomain_ips(self, ipv4=None, ipv6=None, sub_domains=None, force_updates=False):
-        records_to_update = {}
-        for record in self.get_dns_records():
-            print("handling record %s" % record.name)
-            if sub_domains is not None:
-                sub_domain_matches = True in [(sub.lower() == record.name.split(".")[0].lower()) for sub in sub_domains]
-            else:
-                sub_domain_matches = True
-            if sub_domain_matches:
-                records_to_update[record.name.split(".")[0]] = record
-            else:
-                print("subdomain %s does not match any of the given records" % record.name)
-
-        for sub_domain_name in (sub_domains or ()):
-            if sub_domain_name.lower() not in records_to_update:
-                if sub_domain_name == self.zone_name:
-                    sub_domain_name = ""
-                record = self.get_single_dns_record(sub_domain_name)
-                if record is not None:
-                    records_to_update[sub_domain_name] = record
-
-        self.update_records(records_to_update.values(), ipv4, ipv6, force=force_updates)
 
 
 class Config:
@@ -123,20 +19,69 @@ class Config:
                ", sub domains=" + str(self.sub_domains) + ")"
 
 
-if __name__ == "__main__":
-    with open(base_dir + "/config.yaml") as f:
-        configs = yaml.safe_load(f.read())
+def update_all_in_config(config, ipv4, ipv6):
+    if config.ipv6 and ipv6 is None:
+        ipv6 = get_ipv6()
+    if config.ipv4 and ipv4 is None:
+        ipv4 = get_ipv4()
 
-    ipv4, ipv6 = get_ip(), None
+    assert any((ipv4, ipv6)), "need either ipv4 or ipv6 to continue"
     print("ipv4: %s, ipv6: %s" % (ipv4, ipv6))
+    print(config)
 
-    for name, config in configs.items():
-        config = Config(**config)
-        if config.ipv6 and ipv6 is None:
+    updater = CloudflareDNSUpdater(email=config.email, api_key=config.api_key, domain_name=config.domain_name)
+    updater.update_subdomain_ips(ipv4=ipv4, ipv6=ipv6 if config.ipv6 else None, sub_domains=config.sub_domains)
+
+
+def update_single(config, domain_name, sub_domain_name, ipv4=None, ipv6=None):
+    updater = CloudflareDNSUpdater(email=config.email, api_key=config.api_key,
+                                   domain_name=domain_name or config.domain_name)
+    record = updater.get_single_dns_record(sub_domain_name)
+    updater.update_records([record], ipv4, ipv6)
+
+
+def get_config(config_path):
+    with open(config_path) as f:
+        return Config(**yaml.safe_load(f.read()))
+
+
+def main():
+    import time
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--config", help="path to a config file, ./config.yaml by default",
+                        default=base_dir + "/config.yaml")
+    parser.add_argument("--loop", help="whether to keep updating in an infinite loop", default=True)
+    parser.add_argument("--sleep_time", help="how long to sleep between update iterations", default=300)
+    parser.add_argument("--subdomain", help="the subdomain to update", default=None)
+    parser.add_argument("--domain", help="the domain to update", default=None)
+    parser.add_argument("--ipv4", help="override the ipv4 to set domains to. "
+                                       "if not given, will by acquired automatically", default=None)
+    parser.add_argument("--ipv6", help="override the ipv6 to set domains to. "
+                                       "if not given, will by acquired automatically", default=None)
+
+    args = parser.parse_args()
+
+    config = get_config(args.config)
+
+    if args.ipv4 is None and config.ipv4:
+        args.ipv4 = get_ipv4()
+    if args.ipv6 is None and config.ipv6:
+        args.ipv6 = get_ipv6()
+
+    if args.subdomain:
+        update_single(config, args.domain, args.subdomain, args.ipv4, args.ipv6)
+    else:
+        while True:
             try:
-                ipv6 = get_ipv6()
+                config = get_config(args.config)
+                update_all_in_config(config, args.ipv4, args.ipv6)
             except Exception as e:
-                print("unable to get ipv6: %s, skipping ipv6 update" % e)
-        print(config)
-        updater = CloudflareDNSUpdater(email=config.email, api_key=config.api_key, domain_name=config.domain_name)
-        updater.update_subdomain_ips(ipv4=ipv4, ipv6=ipv6 if config.ipv6 else None, sub_domains=config.sub_domains)
+                print("exception occurred:", e)
+                traceback.print_exc()
+            print("waiting for %s seconds before next update" % args.sleep_time)
+            time.sleep(args.sleep_time)
+
+
+if __name__ == "__main__":
+    main()
